@@ -21,11 +21,17 @@ public class PlayerAgent : Agent {
 	public GameObject[] spawnPoints;
 
 	private GameObject target;
+	private GameObject moveTarget;
 	private NavMeshAgent nav;
 
 	private float distanceToClosestPlayer;
+	private float distanceToClosestCover;
 	private float lowestHealthPlayerHP;
 	private Vector3 aimDir;
+
+	private GameObject[] coverPoints;
+
+	private float timeSinceLastHit = 3f;
 
 	void Start () {
 		rb = GetComponent<Rigidbody>();	
@@ -33,17 +39,33 @@ public class PlayerAgent : Agent {
 		shootCooldownTimer = shootCooldown;
 		otherPlayers = GameObject.FindGameObjectsWithTag("player");
 		spawnPoints = GameObject.FindGameObjectsWithTag("spawn");
+		coverPoints = GameObject.FindGameObjectsWithTag("cover");
 		target = GetClosestPlayer();
 		nav = GetComponent<NavMeshAgent>();
+		StartCoroutine("HPRegen");
 	}
 
 	void Update() {
 		shootCooldownTimer -= Time.deltaTime;
+		timeSinceLastHit += Time.deltaTime;
 		if (shootCooldownTimer <= 0f) {
 			shotReady = true;
 			Aim(target.transform.position, 0.3f);
 			Shoot();
 			Move();
+		}
+	}
+
+	IEnumerator HPRegen() {
+		while(true) {
+			if (timeSinceLastHit >= 3f) {
+				if (HP <= 0.9f) {
+					HP += 0.1f;
+				} else {
+					HP = 1.0f;
+				}
+			}
+			yield return new WaitForSeconds(1f);
 		}
 	}
 
@@ -61,6 +83,45 @@ public class PlayerAgent : Agent {
 			target = closest;
 		}
 
+	}
+
+	void SwitchMovement(float threshold) {
+		// change the movement strategy between chasing a player and
+		// and taking cover
+
+		if (HP < threshold) {
+			TakeCover();
+		} else {
+			Chase();
+		}
+	}
+
+	void TakeCover() {
+		GameObject cover = GetClosestCover();
+		if (cover != null) {
+			moveTarget = cover;
+		} else {
+			Chase();
+		}
+	}
+
+	void Chase() {
+		moveTarget = target;
+	}
+
+	GameObject GetClosestCover() {
+		float minDist = 99999f;
+		GameObject closestCover = null;
+		foreach(GameObject cover in coverPoints)
+		{
+			float dist = Vector3.Distance(cover.transform.position, transform.position);
+			if (dist <= minDist && cover.GetComponent<CoverPoint>().CheckCover(this.gameObject)) {
+				minDist = dist;
+				closestCover = cover;
+			}
+		}
+		distanceToClosestCover = minDist / 100f;
+		return closestCover;
 	}
 
 
@@ -100,6 +161,7 @@ public class PlayerAgent : Agent {
 		if (collision.gameObject.tag == "projectile"){
 			if (collision.gameObject.GetComponent<Projectile>().origin != playerNum) {
 				HP -= 0.1f;
+				timeSinceLastHit = 0f;
 				GameObject player = FindPlayerWithNum(collision.gameObject.GetComponent<Projectile>().origin);
 				PlayerAgent agent = player.GetComponent<PlayerAgent>();
 				if (HP <= 0f) {
@@ -130,7 +192,7 @@ public class PlayerAgent : Agent {
 		Vector3 shotPos = transform.position;
 		GameObject shot = Instantiate(projectileStandard, shotPos, Quaternion.identity);
 		shot.GetComponent<Projectile>().origin = playerNum;
-		shot.GetComponent<Rigidbody>().velocity = aimDir * 40f;
+		shot.GetComponent<Rigidbody>().velocity = aimDir * 80f;
 		shotReady = false;
 		shootCooldownTimer = shootCooldown;
 	}
@@ -180,11 +242,7 @@ public class PlayerAgent : Agent {
 	}
 
 	void Move() {
-//		Vector3 moveDir = new Vector3(xDir, 0f, zDir);
-//		moveDir = moveDir.normalized;
-//		rb.velocity = moveDir * speed;
-		nav.SetDestination(target.transform.position);
-
+		nav.SetDestination(moveTarget.transform.position);
 	}
 
 	public override void AgentAction(float[] vectorAction, string textAction)
@@ -215,6 +273,7 @@ public class PlayerAgent : Agent {
 	    float threshold = Mathf.Clamp(vectorAction[0], -1, 1);
 //		Debug.Log(threshold);
 		SwitchTarget(threshold);
+		SwitchMovement(0.7f);
 	 }
 
 	 GameObject FindPlayerWithNum(int num) {

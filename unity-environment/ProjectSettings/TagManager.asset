@@ -25,6 +25,7 @@ TagManager:
   - player
   - projectile
   - spawn
+  - cover
   layers:
   - Default
   - TransparentFX
