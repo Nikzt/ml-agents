@@ -8,8 +8,10 @@ public class PlayerAgent : Agent {
 	public float speed = 4f;
 	public float HP;
 	public int playerNum;
-	private float shootCooldown = 0.4f;
-	public float shootCooldownTimer = 0.4f;
+	public float shootCooldown = 0.4f;
+	private float shootCooldownTimer = 0.4f;
+	public int maxAmmo = 10;
+	private int ammo;
 	private bool shotReady = true;
 	private int prevKills = 0;
 	private int kills = 0;
@@ -33,14 +35,19 @@ public class PlayerAgent : Agent {
 
 	private float timeSinceLastHit = 3f;
 
+	private float thresholdTarget = 0.5f;
+	private float thresholdHP = 0.5f;
+
 	void Start () {
 		rb = GetComponent<Rigidbody>();	
 		HP = 1.0f;
+		ammo = maxAmmo;
 		shootCooldownTimer = shootCooldown;
 		otherPlayers = GameObject.FindGameObjectsWithTag("player");
 		spawnPoints = GameObject.FindGameObjectsWithTag("spawn");
 		coverPoints = GameObject.FindGameObjectsWithTag("cover");
 		target = GetClosestPlayer();
+		moveTarget = GetClosestPlayer();
 		nav = GetComponent<NavMeshAgent>();
 		StartCoroutine("HPRegen");
 	}
@@ -51,7 +58,9 @@ public class PlayerAgent : Agent {
 		if (shootCooldownTimer <= 0f) {
 			shotReady = true;
 			Aim(target.transform.position, 0.3f);
-			Shoot();
+			if (CheckLineOfSight(target)) {
+				Shoot();
+			}
 			Move();
 		}
 	}
@@ -69,6 +78,19 @@ public class PlayerAgent : Agent {
 		}
 	}
 
+	bool CheckLineOfSight(GameObject shootTarget) {
+		RaycastHit hitPoint;
+		Ray ray = new Ray();
+		ray.direction = shootTarget.transform.position - transform.position;
+		ray.origin = transform.position;
+		if (Physics.Raycast(ray, out hitPoint, Mathf.Infinity)) {
+			if (hitPoint.collider.tag == "player") {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	void SwitchTarget(float threshold) {
 		// target the closest player, the player with the least hp,
 		// or the player that has done the most damage to me in the 
@@ -77,12 +99,36 @@ public class PlayerAgent : Agent {
 		GameObject lowhp = GetLowestHealthPlayer();
 		if (lowestHealthPlayerHP >= 1f) {
 			target = closest;
-		} else if (distanceToClosestPlayer - lowestHealthPlayerHP <= threshold) {
+		} else if (distanceToClosestPlayer >= threshold * lowestHealthPlayerHP) {
 			target = lowhp;
 		} else {
 			target = closest;
 		}
 
+	}
+
+	void SelectTactic(float[] act) {
+       int action = Mathf.FloorToInt(act[0]);
+       switch (action)
+       {
+           case 0:
+				Chase();
+				target = GetClosestPlayer();
+               break;
+           case 1:
+		   		Chase();
+				target = GetLowestHealthPlayer();
+               break;
+           case 2:
+		   		TakeCover();
+				target = GetClosestPlayer();
+               break;
+           case 3:
+		   		TakeCover();
+				target = GetLowestHealthPlayer();
+               break;
+       }
+    
 	}
 
 	void SwitchMovement(float threshold) {
@@ -120,7 +166,7 @@ public class PlayerAgent : Agent {
 				closestCover = cover;
 			}
 		}
-		distanceToClosestCover = minDist / 100f;
+		distanceToClosestCover = minDist / 20f;
 		return closestCover;
 	}
 
@@ -136,23 +182,10 @@ public class PlayerAgent : Agent {
 
 	public override void CollectObservations()
 	{
-		// Relative positions to all other players
-		// Squash values into [-1,1] range by dividing by half the stage width
-	//	foreach(GameObject player in otherPlayers)
-	//	{
-	//		Vector3 playerPosition = player.transform.position - this.transform.position;
-	//		if (player.name != this.name) {
-	//			AddVectorObs(playerPosition.x / 20);
-	//			AddVectorObs(playerPosition.z / 20);
-	//			AddVectorObs(player.GetComponent<PlayerAgent>().HP);
-	//		}
-	//	}
-	//	AddVectorObs(HP);
 		AddVectorObs(lowestHealthPlayerHP);
 		AddVectorObs(distanceToClosestPlayer);
-		// Whether each player is in line of sight or not (raycast?)
-
-		// Distances to each wall
+		AddVectorObs(distanceToClosestCover);
+		AddVectorObs(HP);
 	}
 
 	void OnTriggerEnter(Collider collision) {
@@ -167,10 +200,14 @@ public class PlayerAgent : Agent {
 				if (HP <= 0f) {
 					agent.KilledPlayer();
 					dead = true;
+					AddReward(-1f);
+					AgentReset();
+					Done();
 				} else {
 					agent.DealtDamage(0.1f);
+					AddReward(-0.01f);
 				}
-				Destroy(collision.gameObject);
+				StartCoroutine(collision.gameObject.GetComponent<Projectile>().DelayedDestroy());
 			}
 		}
 	}
@@ -178,23 +215,36 @@ public class PlayerAgent : Agent {
 	public void KilledPlayer() {
 		prevKills = kills;
 		kills += 1;
+		AddReward(0.5f);
 	}
 
 	public void DealtDamage(float damage) {
 		prevDamageDone = damageDone;
 		damageDone += damage;
+		AddReward(0.005f);
 	}
 
 	void Shoot() {
 
 		// Shoot basic projectile
 
-		Vector3 shotPos = transform.position;
-		GameObject shot = Instantiate(projectileStandard, shotPos, Quaternion.identity);
-		shot.GetComponent<Projectile>().origin = playerNum;
-		shot.GetComponent<Rigidbody>().velocity = aimDir * 80f;
-		shotReady = false;
-		shootCooldownTimer = shootCooldown;
+		if (ammo > 0) {
+
+			Vector3 shotPos = transform.position;
+			GameObject shot = Instantiate(projectileStandard, shotPos, Quaternion.identity);
+			shot.GetComponent<Projectile>().origin = playerNum;
+			shot.GetComponent<Rigidbody>().velocity = aimDir * 80f;
+			shotReady = false;
+			shootCooldownTimer = shootCooldown;
+			ammo -= 1;
+		} else {
+			StartCoroutine("Reload");
+		}
+	}
+
+	IEnumerator Reload() {
+		yield return new WaitForSeconds(2f);
+		ammo = maxAmmo;
 	}
 
 	void Aim(Vector3 target, float error) {
@@ -220,7 +270,7 @@ public class PlayerAgent : Agent {
 				}
 			}
 		}
-		distanceToClosestPlayer = minDist / 100f;
+		distanceToClosestPlayer = minDist / 20f;
 		return closestPlayer;
 	}
 
@@ -247,33 +297,7 @@ public class PlayerAgent : Agent {
 
 	public override void AgentAction(float[] vectorAction, string textAction)
 	{
-	    // killed a player
-	    if (kills > prevKills)
-	    {
-	        AddReward(1.0f);
-			prevKills = kills;
-	    }
-	
-	    // hit a player
-	    if (damageDone > prevDamageDone)
-	    {
-	        AddReward(0.1f);
-			prevDamageDone = damageDone;
-	    }
-
-
-	    // player died
-	    if (dead == true)
-	    {
-	        AddReward(-1.0f);
-			dead = false;
-			Done();
-	    }
-
-	    float threshold = Mathf.Clamp(vectorAction[0], -1, 1);
-//		Debug.Log(threshold);
-		SwitchTarget(threshold);
-		SwitchMovement(0.7f);
+		SelectTactic(vectorAction);
 	 }
 
 	 GameObject FindPlayerWithNum(int num) {

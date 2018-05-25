@@ -25,6 +25,7 @@ public class PlayerDecision : MonoBehaviour, Decision
             // We use this number to control the Platform's x axis rotation speed,  
             // so that the Platform is tilted in the z orientation correspondingly. 
             act.Add(vectorObs[0]);
+            act.Add(vectorObs[1]);
 
             return act.ToArray();
         }
