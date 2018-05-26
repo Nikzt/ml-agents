@@ -38,6 +38,16 @@ public class PlayerAgent : Agent {
 	private float thresholdTarget = 0.5f;
 	private float thresholdHP = 0.5f;
 
+	private GameController gameController;
+
+	private float damageTaken;
+	private float deaths;
+	private float frags;
+
+	public string state;
+
+	public float[] w;
+	Renderer rend;
 	void Start () {
 		rb = GetComponent<Rigidbody>();	
 		HP = 1.0f;
@@ -50,11 +60,16 @@ public class PlayerAgent : Agent {
 		moveTarget = GetClosestPlayer();
 		nav = GetComponent<NavMeshAgent>();
 		StartCoroutine("HPRegen");
+		rend = GetComponent<Renderer>();
+
+		gameController = GameObject.Find("GameController").GetComponent<GameController>();
 	}
 
 	void Update() {
 		shootCooldownTimer -= Time.deltaTime;
 		timeSinceLastHit += Time.deltaTime;
+		target = GetClosestPlayer();
+		SelectTactic();
 		if (shootCooldownTimer <= 0f) {
 			shotReady = true;
 			Aim(target.transform.position, 0.3f);
@@ -91,54 +106,28 @@ public class PlayerAgent : Agent {
 		return false;
 	}
 
-	void SwitchTarget(float threshold) {
-		// target the closest player, the player with the least hp,
-		// or the player that has done the most damage to me in the 
-		// last few seconds
-		GameObject closest = GetClosestPlayer();
-		GameObject lowhp = GetLowestHealthPlayer();
-		if (lowestHealthPlayerHP >= 1f) {
-			target = closest;
-		} else if (distanceToClosestPlayer >= threshold * lowestHealthPlayerHP) {
-			target = lowhp;
-		} else {
-			target = closest;
-		}
-
-	}
-
-	void SelectTactic(float[] act) {
-       int action = Mathf.FloorToInt(act[0]);
-       switch (action)
-       {
-           case 0:
-				Chase();
-				target = GetClosestPlayer();
-               break;
-           case 1:
-		   		Chase();
-				target = GetLowestHealthPlayer();
-               break;
-           case 2:
-		   		TakeCover();
-				target = GetClosestPlayer();
-               break;
-           case 3:
-		   		TakeCover();
-				target = GetLowestHealthPlayer();
-               break;
-       }
-    
-	}
-
-	void SwitchMovement(float threshold) {
-		// change the movement strategy between chasing a player and
-		// and taking cover
-
-		if (HP < threshold) {
-			TakeCover();
-		} else {
+	void SelectTactic() {
+		float v1 = EvaluateTactic("chase");
+		float v2 = EvaluateTactic("cover");
+		if (v1 > v2) {
 			Chase();
+
+			rend.material.SetColor("_Color", Color.red);
+		} else {
+			TakeCover();
+			rend.material.SetColor("_Color", Color.blue);
+		}
+	}
+
+	float EvaluateTactic(string tactic) {
+		GetClosestCover();
+		GetClosestPlayer();
+		if (tactic == "chase") {
+			return w[0] * HP + w[1] * distanceToClosestCover + w[2] * (1f - distanceToClosestPlayer) + w[3] * (1f - lowestHealthPlayerHP); 
+		} else if (tactic == "cover") {
+			return w[4] * (1f - HP) + w[5] * (1f - distanceToClosestCover) + w[6] * distanceToClosestPlayer + w[7] * lowestHealthPlayerHP; 
+		} else {
+			return 0f;
 		}
 	}
 
@@ -166,7 +155,7 @@ public class PlayerAgent : Agent {
 				closestCover = cover;
 			}
 		}
-		distanceToClosestCover = minDist / 20f;
+		distanceToClosestCover = Mathf.Clamp(minDist / 20f, 0f, 1f) ;
 		return closestCover;
 	}
 
@@ -178,14 +167,22 @@ public class PlayerAgent : Agent {
 		this.rb.angularVelocity = Vector3.zero;
         this.rb.velocity = Vector3.zero;
 		this.HP = 1.0f;
+		this.deaths += 1f;
+	}
+
+	public override void AgentOnDone() {
+		deaths = 0f;
+		kills = 0;
+		damageDone = 0f;
+		damageTaken = 0f;
 	}
 
 	public override void CollectObservations()
 	{
-		AddVectorObs(lowestHealthPlayerHP);
 		AddVectorObs(distanceToClosestPlayer);
-		AddVectorObs(distanceToClosestCover);
 		AddVectorObs(HP);
+		AddVectorObs(lowestHealthPlayerHP);
+		AddVectorObs(distanceToClosestCover);
 	}
 
 	void OnTriggerEnter(Collider collision) {
@@ -201,11 +198,11 @@ public class PlayerAgent : Agent {
 					agent.KilledPlayer();
 					dead = true;
 					AddReward(-1f);
-					AgentReset();
 					Done();
+					AgentReset();
 				} else {
 					agent.DealtDamage(0.1f);
-					AddReward(-0.01f);
+					damageTaken += 0.1f;
 				}
 				StartCoroutine(collision.gameObject.GetComponent<Projectile>().DelayedDestroy());
 			}
@@ -215,7 +212,8 @@ public class PlayerAgent : Agent {
 	public void KilledPlayer() {
 		prevKills = kills;
 		kills += 1;
-		AddReward(0.5f);
+		AddReward(1f);
+		gameController.UpdateScore(playerNum);
 	}
 
 	public void DealtDamage(float damage) {
@@ -270,7 +268,7 @@ public class PlayerAgent : Agent {
 				}
 			}
 		}
-		distanceToClosestPlayer = minDist / 20f;
+		distanceToClosestPlayer = Mathf.Clamp(minDist / 20f, 0f, 1f);
 		return closestPlayer;
 	}
 
@@ -295,10 +293,19 @@ public class PlayerAgent : Agent {
 		nav.SetDestination(moveTarget.transform.position);
 	}
 
+	void UpdateParameters(float[] vectorAction) {
+		w = vectorAction;
+	}
+
 	public override void AgentAction(float[] vectorAction, string textAction)
 	{
-		SelectTactic(vectorAction);
-	 }
+		UpdateParameters(vectorAction);
+		if (playerNum == 1) {
+			Debug.Log(EvaluateTactic("chase"));
+			Debug.Log(EvaluateTactic("cover"));
+		}
+
+	}
 
 	 GameObject FindPlayerWithNum(int num) {
 		 foreach (GameObject player in otherPlayers) {
