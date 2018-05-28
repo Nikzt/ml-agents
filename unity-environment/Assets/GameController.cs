@@ -34,6 +34,10 @@ public class GameController : MonoBehaviour {
 		foreach (GameObject player in players) {
 			PlayerControl agent = player.GetComponent<PlayerControl>();
 			agent.PlayerReset();
+			if (agent.isAgent) {
+				PlayerAgent pa = player.GetComponent<PlayerAgent>();
+				pa.Done();
+			}
 		}
 		Debug.Log("Restarted Game");
 		gameTime = 0f;

@@ -1,6 +1,6 @@
 default:
     trainer: ppo
-    batch_size: 256
+    batch_size: 32
     beta: 5.0e-3
     buffer_size: 2048
     epsilon: 0.2
@@ -13,9 +13,9 @@ default:
     normalize: false
     num_epoch: 3
     num_layers: 2
-    time_horizon: 64
+    time_horizon: 32
     sequence_length: 64
-    summary_freq: 100
+    summary_freq: 10
     use_recurrent: false
 
 BananaBrain:

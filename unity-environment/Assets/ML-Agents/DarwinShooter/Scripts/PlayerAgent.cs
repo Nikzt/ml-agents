@@ -5,11 +5,16 @@ using UnityEngine.AI;
 
 public class PlayerAgent : Agent {
 	private PlayerControl pc;
+	InfoUI info;
 	void Start () {
 		pc = GetComponent<PlayerControl>();
+		RequestDecision();
+		info = GameObject.Find("Text").GetComponent<InfoUI>();
+
 	}
 
 	void Update() {
+		info.SetText(pc.threat.ToString());
 	}
 
 	public override void AgentReset()
@@ -23,10 +28,11 @@ public class PlayerAgent : Agent {
 
 	public override void CollectObservations()
 	{
-		AddVectorObs(pc.distanceToClosestPlayer);
-		AddVectorObs(pc.HP);
-		AddVectorObs(pc.lowestHealthPlayerHP);
-		AddVectorObs(pc.distanceToClosestCover);
+		pc.stats = pc.stats.normalized;
+		AddVectorObs(pc.stats[0]);
+		AddVectorObs(pc.stats[1]);
+		AddVectorObs(pc.stats[2]);
+		pc.stats = Vector3.zero;
 	}
 
 
@@ -37,6 +43,9 @@ public class PlayerAgent : Agent {
 
 	public override void AgentAction(float[] vectorAction, string textAction)
 	{
+		for (int i = 0; i < vectorAction.Length; i++) {
+			vectorAction[i] = Mathf.Clamp(vectorAction[i], 0f, 1f);
+		}
 		UpdateParameters(vectorAction);
 	}
 

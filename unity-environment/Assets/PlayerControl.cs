@@ -9,6 +9,7 @@ public class PlayerControl : MonoBehaviour {
 
 	Rigidbody rb;
 	public GameObject projectileStandard;
+	public Projectile projectile;
 	private NavMeshAgent nav;
 	private GameController gameController;
 	Renderer rend;
@@ -42,29 +43,35 @@ public class PlayerControl : MonoBehaviour {
 	private GameObject[] coverPoints;
 	private GameObject[] otherPlayers;
 	public GameObject[] spawnPoints;
+	public float threat;
+	private float[] killPotential;
+
+	public Vector3 stats;
 
 	// Targeting
 
-	private GameObject target;
+	private GameObject attackTarget;
 	private GameObject moveTarget;
 	private Vector3 aimDir;
 
 	// Other
 
-	bool isAgent;
+	public bool isAgent;
 	public string state;
 	public float[] w;
 
 	void Start () {
 		rb = GetComponent<Rigidbody>();	
 		HP = 1.0f; // HP goes from 0 to 1
-		otherPlayers = GameObject.FindGameObjectsWithTag("player");
+		otherPlayers = GetOtherPlayers();
 		spawnPoints = GameObject.FindGameObjectsWithTag("spawn");
 		coverPoints = GameObject.FindGameObjectsWithTag("cover");
+		projectile = Instantiate(projectileStandard).GetComponent<Projectile>();
 
 		// Initially start chasing closest player
-		target = GetClosestPlayer();
+		attackTarget = GetClosestPlayer();
 		moveTarget = GetClosestPlayer();
+		state = "ranged";
 
 		nav = GetComponent<NavMeshAgent>();
 		rend = GetComponent<Renderer>();
@@ -72,8 +79,11 @@ public class PlayerControl : MonoBehaviour {
 
 		ammo = maxAmmo;
 		shootCooldownTimer = shootCooldown;
+		killPotential = new float[otherPlayers.Length];
 
 		StartCoroutine("HPRegen");
+
+		stats = Vector3.zero;
 
 		if (GetComponent<PlayerAgent>() == null) {
 			isAgent = false;
@@ -83,77 +93,115 @@ public class PlayerControl : MonoBehaviour {
 			pa = GetComponent<PlayerAgent>();
 		}
 
+
+	}
+
+	GameObject[] GetOtherPlayers() {
+		GameObject[] players = GameObject.FindGameObjectsWithTag("player");
+		GameObject[] oPlayers = new GameObject[players.Length - 1];
+		int i = 0;
+		foreach (GameObject player in players) {
+			PlayerControl agent = player.GetComponent<PlayerControl>();
+			if (agent.playerNum != playerNum) {
+				oPlayers[i] = player;
+				i++;
+			}
+		}
+		return oPlayers;
 	}
 
 	void Update() {
 		shootCooldownTimer -= Time.deltaTime;
 		timeSinceLastHit += Time.deltaTime;
+		EvaluateThreat();
+		EvaluateKillPotential();
 		SelectTarget();
 		SelectTactic();
 		if (shootCooldownTimer <= 0f) {
 			shotReady = true;
-			Aim(target.transform.position, 0.3f);
-			if (CheckLineOfSight(target)) {
+			Aim(attackTarget.transform.position, 0.3f);
+			if (CheckLineOfSight(attackTarget)) {
 				Shoot();
 			}
 			Move();
 		}
 	}
 
-	void SelectTactic() {
-		float v1 = EvaluateTactic("chase");
-		float v2 = EvaluateTactic("cover");
-		if (v1 > v2) {
-			Chase();
+	// DECISION MAKING --------------------------------------------------------------------
 
+	void EvaluateThreat() {
+		threat = (1f - HP) * (w[3] * (NumInLineOfSight() / 3f) + w[4] * (1f - (ammo / maxAmmo)) + w[5] * distanceToClosestCover);
+	}
+
+	void EvaluateKillPotential() {
+		int i = 0;
+		foreach (GameObject player in otherPlayers) {
+			killPotential[i] = 0f;
+			killPotential[i] += w[0] * (1f - player.GetComponent<PlayerControl>().HP);
+			float dist = Vector3.Distance(player.transform.position, transform.position);
+			killPotential[i] += w[1] * (1f - Mathf.Clamp(dist / 20f, 0f, 1f));
+			if (CheckLineOfSight(player)) {
+				killPotential[i] += w[2];
+			}
+		}
+	}
+
+	void DecideReload() {
+		if (NumInLineOfSight() == 0 && ammo < 8) {
+			StartCoroutine(Reload());
+		} 
+	}
+
+
+	void SelectTactic() {
+		if (threat <= 0f) {
+			Chase();
+			stats[0] += 0.01f;
 			rend.material.SetColor("_Color", Color.red);
+		} else if (threat >= 0.3f && threat < 1f) {
+			RangedAttack();
+			stats[1] += 0.01f;
+			rend.material.SetColor("_Color", Color.yellow);
 		} else {
 			TakeCover();
+			stats[2] += 0.01f;
 			rend.material.SetColor("_Color", Color.blue);
 		}
 	}
 
 	void SelectTarget() {
-		GameObject closest = GetClosestPlayer();
-		GameObject lowhp = GetLowestHealthPlayer();
-		float v1 = distanceToClosestPlayer;
-		float v2 = lowestHealthPlayerHP;
-		if (w[4] * v1 < w[5] * v2) {
-			target = GetClosestPlayer();
-		} else {
-			target = GetLowestHealthPlayer();
+		float maxkp = 0f;
+		int maxind = 0;
+		for (int i = 0; i < otherPlayers.Length; i++) {
+			if (killPotential[i] >= maxkp) {
+				maxkp = killPotential[i];
+				maxind = i;
+			}	
 		}
+		attackTarget = otherPlayers[maxind];
 	}
 
-	float EvaluateTactic(string tactic) {
-		GetClosestCover();
-		GetClosestPlayer();
-		if (tactic == "chase") {
-			return w[0] * HP + w[1] * distanceToClosestCover + w[2] * (1f - distanceToClosestPlayer) + w[3] * (1f - lowestHealthPlayerHP); 
-		} else if (tactic == "cover") {
-			return w[0] * (1f - HP) + w[1] * (1f - distanceToClosestCover) + w[2] * distanceToClosestPlayer + w[3] * lowestHealthPlayerHP; 
-		} else {
-			return 0f;
-		}
-	}
+	// ACTIONS -------------------------------------------------------
 
 	void TakeCover() {
 		GameObject cover = GetClosestCover();
 		if (cover != null) {
 			moveTarget = cover;
+			state = "cover";
 		} else {
 			Chase();
 		}
 	}
 
 	void Chase() {
-		moveTarget = target;
+		moveTarget = attackTarget;
+		state = "chase";
 	}
 
-
-
-
-
+	void RangedAttack() {
+		moveTarget = attackTarget;
+		state = "ranged";
+	}
 
 	IEnumerator Reload() {
 		reloading = true;
@@ -180,24 +228,41 @@ public class PlayerControl : MonoBehaviour {
 	}
 
 	void Move() {
-		nav.SetDestination(moveTarget.transform.position);
+		if (state == "ranged") {
+			if (CheckLineOfSight(moveTarget)) {
+				nav.SetDestination(transform.position);
+			} else {
+				nav.SetDestination(moveTarget.transform.position);
+			}
+		} else {
+			nav.SetDestination(moveTarget.transform.position);
+		}
 	}
 
-	void Shoot() {
+	bool Shoot() {
 
 		// Shoot basic projectile
 
 		if (ammo > 0 & !reloading) {
 
-			Vector3 shotPos = transform.position;
-			GameObject shot = Instantiate(projectileStandard, shotPos, Quaternion.identity);
-			shot.GetComponent<Projectile>().origin = playerNum;
-			shot.GetComponent<Rigidbody>().velocity = aimDir * 80f;
+			RaycastHit hitPoint;
+			Ray ray = new Ray();
+			ray.direction = aimDir;
+			ray.origin = transform.position + aimDir * 0.5f;
 			shotReady = false;
 			shootCooldownTimer = shootCooldown;
 			ammo -= 1;
+			if (Physics.Raycast(ray, out hitPoint, Mathf.Infinity)) {
+				projectile.DrawShot(ray.origin, hitPoint.point);
+				if (hitPoint.collider.tag == "player") {
+					hitPoint.collider.gameObject.GetComponent<PlayerControl>().Hit(playerNum);
+					return true;
+				}
+			}
+			return false;
 		} else {
 			StartCoroutine("Reload");
+			return false;
 		}
 	}
 
@@ -214,6 +279,16 @@ public class PlayerControl : MonoBehaviour {
 			}
 		}
 		return false;
+	}
+
+	int NumInLineOfSight() {
+		int count = 0;
+		foreach (GameObject player in otherPlayers) {
+			if (CheckLineOfSight(player)) {
+				count += 1;
+			}
+		}
+		return count;
 	}
 
 
@@ -294,28 +369,24 @@ public class PlayerControl : MonoBehaviour {
 	
 	// OTHER -------------------------------------------------------------------
 
-	void OnTriggerEnter(Collider collision) {
+	public void Hit(int pnum) {
 
 		// take damage if hit by enemy projectile
-		if (collision.gameObject.tag == "projectile"){
-			if (collision.gameObject.GetComponent<Projectile>().origin != playerNum) {
-				HP -= 0.1f;
-				timeSinceLastHit = 0f;
-				GameObject player = FindPlayerWithNum(collision.gameObject.GetComponent<Projectile>().origin);
-				PlayerControl agent = player.GetComponent<PlayerControl>();
-				if (HP <= 0f) {
-					agent.KilledPlayer();
-					PlayerReset();
-					if (isAgent) {
-						pa.Done();
-						pa.AddReward(-1f);
-					}
-				} else {
-					agent.DealtDamage(0.1f);
-					damageTaken += 0.1f;
-				}
-				StartCoroutine(collision.gameObject.GetComponent<Projectile>().DelayedDestroy());
+		HP -= 0.1f;
+		timeSinceLastHit = 0f;
+		GameObject player = FindPlayerWithNum(pnum);
+		PlayerControl agent = player.GetComponent<PlayerControl>();
+		if (HP <= 0f) {
+			agent.KilledPlayer();
+			if (isAgent) {
+				pa.AddReward(-0.1f);
+				PlayerReset();
+			} else {
+				PlayerReset();
 			}
+		} else {
+			agent.DealtDamage(0.1f);
+			damageTaken += 0.1f;
 		}
 	}
 
